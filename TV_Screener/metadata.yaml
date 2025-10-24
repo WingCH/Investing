@@ -1,0 +1,143 @@
+# TV_Screener Project Metadata
+
+project:
+  name: "TradingView Forex Screener Auto Export"
+  code: "TV_Screener"
+  type: "Data Scraping & Monitoring Tool"
+  status: "Design Phase"
+  owner: "Wing Chan"
+  created_date: "2025-10-24"
+  last_updated: "2025-10-24"
+
+market:
+  asset_class: "Forex"
+  target_instruments:
+    - "All currency pairs on TradingView Forex Screener"
+    - "Typically 70+ major and minor forex pairs"
+  data_source: "TradingView (https://www.tradingview.com/forex-screener/)"
+
+strategy:
+  category: "Monitoring & Data Collection"
+  approach: "Automated web scraping with change detection"
+  execution_frequency: "Every 2 hours"
+  signal_type: "Technical Rating Changes (Strong Buy/Buy/Neutral/Sell/Strong Sell)"
+
+technology:
+  platform: "N8N Workflow Automation"
+  language: "JavaScript (Node.js)"
+  deployment: "Self-hosted or N8N Cloud"
+  
+  dependencies:
+    - name: "Firecrawl API"
+      version: "v2"
+      purpose: "Web scraping and data extraction"
+      cost: "Free tier (500 req/month)"
+    
+    - name: "Google Sheets API"
+      version: "v4"
+      purpose: "Data storage and historical tracking"
+      cost: "Free"
+    
+    - name: "Bark Push Service"
+      version: "N/A"
+      purpose: "iOS push notifications"
+      cost: "Free"
+
+credentials:
+  firecrawl_api_key: "fc-752d2d2535c9478b83b5aebc3c802781"
+  google_sheets: "Service Account (JSON key required)"
+  bark_device_key: "User-specific (set in environment variable)"
+
+data_structure:
+  google_sheets:
+    - name: "Latest"
+      purpose: "Current state of all forex pairs"
+      columns: ["Symbol", "Technical Rating", "Last Updated"]
+    
+    - name: "History"
+      purpose: "Complete historical record"
+      columns: ["Timestamp", "Symbol", "Technical Rating", "Changed", "Previous Rating"]
+    
+    - name: "Changes_Log"
+      purpose: "Log of rating changes only"
+      columns: ["Timestamp", "Symbol", "From Rating", "To Rating", "Notified"]
+
+performance:
+  execution_time: "~30-60 seconds per run"
+  api_usage: "~360 Firecrawl requests/month"
+  storage_growth: "~10KB per execution (~7.2MB/month)"
+  notification_frequency: "Variable (depends on market volatility)"
+
+monitoring:
+  metrics:
+    - "Workflow execution success rate"
+    - "Number of rating changes detected per day"
+    - "Firecrawl API quota usage"
+    - "Google Sheets data volume"
+  
+  alerts:
+    - "Workflow execution failures"
+    - "Firecrawl API quota near limit"
+    - "Data parsing errors"
+
+documentation:
+  files:
+    - name: "N8N_DESIGN_PLAN.md"
+      description: "Comprehensive workflow design document"
+      sections:
+        - "Environment setup"
+        - "Node-by-node configuration"
+        - "Testing procedures"
+        - "Troubleshooting guide"
+    
+    - name: "PRINCIPLES.md"
+      description: "Strategy rationale and core concepts"
+    
+    - name: "README.md"
+      description: "Quick start guide and overview"
+    
+    - name: "context.md"
+      description: "Brief project context summary"
+
+risk_assessment:
+  technical_risks:
+    - risk: "TradingView page structure changes"
+      mitigation: "Regular monitoring, Firecrawl schema updates"
+      severity: "Medium"
+    
+    - risk: "API service interruption"
+      mitigation: "Error notifications, manual fallback"
+      severity: "Low"
+  
+  operational_risks:
+    - risk: "Data accuracy issues"
+      mitigation: "Periodic manual verification"
+      severity: "Medium"
+    
+    - risk: "API quota exhaustion"
+      mitigation: "Usage monitoring, execution frequency adjustment"
+      severity: "Low"
+
+compliance:
+  data_usage: "Personal use only"
+  terms_of_service: "Complies with TradingView ToS (read-only access)"
+  data_privacy: "No personal data collected; market data only"
+
+future_enhancements:
+  - "Multi-source screener integration (Investing.com, ForexFactory)"
+  - "Historical backtesting module"
+  - "Google Data Studio visualization dashboard"
+  - "Crypto and Stock screeners support"
+  - "AI-powered signal filtering based on historical accuracy"
+  - "Trading system API integration"
+
+tags:
+  - "forex"
+  - "screener"
+  - "automation"
+  - "n8n"
+  - "monitoring"
+  - "data-scraping"
+  - "technical-analysis"
+  - "notifications"
+
