@@ -14,9 +14,10 @@
 **核心功能**:
 - 使用 Firecrawl API 抓取 TradingView Forex Screener 頁面數據
 - 解析並提取外匯貨幣對的 symbol_name 和 technical_rating
-- 將數據儲存至 Google Sheets 並保留歷史記錄
+- 將數據以橫向格式儲存至 Google Sheets 並保留歷史記錄
 - 與上一次數據對比，檢測 technical_rating 變化
-- 透過 Bark 推送通知重要變化
+- 🎯 **個性化訂閱**: 每個用戶可選擇只接收特定貨幣對的變化通知
+- 透過 Bark 推送通知重要變化到多個裝置
 
 **解決痛點**:
 - TradingView 免費用戶無法導出 Screener 數據
@@ -33,8 +34,8 @@
 
 ```
 ┌─────────────────┐
-│  Cron Trigger   │ 每小時執行一次
-│  or Manual      │
+│  Schedule       │ 每 2 小時執行一次
+│  Trigger        │ (可調整)
 └────────┬────────┘
          │
          ▼
@@ -45,40 +46,51 @@
          │
          ▼
 ┌─────────────────┐
-│  Parse JSON     │ 解析回傳的 JSON
-│  Extract Data   │ 提取 symbol + rating
+│  Parse & Format │ 解析回傳的 JSON
+│  Data (Code)    │ 轉換為橫向格式
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│ Google Sheets   │ 讀取上一次數據
-│ (Read)          │ 從 "Latest" sheet
+│ Google Sheets   │ 追加新數據到 Sheet
+│ (Append)        │ 橫向格式：Timestamp + Symbols
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│  Compare Data   │ JavaScript Code
-│  Detect Changes │ 比對評級變化
+│ Google Sheets   │ 讀取所有歷史數據
+│ (Read All)      │ 用於比對
 └────────┬────────┘
          │
-         ├─────────────┐
-         ▼             ▼
-┌─────────────────┐  ┌─────────────────┐
-│  準備工作表     │  │  IF Node        │
-│  數據格式       │  │  Has Changes?   │
-└────────┬────────┘  └────────┬────────┘
-         │                    │ Yes
-         ▼                    ▼
-┌─────────────────┐  ┌─────────────────┐
-│ Google Sheets   │  │  Format Message │
-│ (Append Latest) │  │  (Set Node)     │
-└─────────────────┘  └────────┬────────┘
-                              │
-                              ▼
-                     ┌─────────────────┐
-                     │  Send Bark      │
-                     │  Notification   │
-                     └─────────────────┘
+         ▼
+┌─────────────────┐
+│  比對最近兩行   │ JavaScript Code
+│  找變化 (Code)  │ 比對最後兩次評級
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  IF Node        │ 檢查是否有變化？
+│  Has Changes?   │
+└────────┬────────┘
+         │ Yes
+         ▼
+┌─────────────────┐
+│  準備多裝置     │ 🎯 根據用戶訂閱
+│  推送 (Code)    │ 過濾相關變化
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  格式化個人     │ 為每個用戶生成
+│  通知 (Code)    │ 專屬通知內容
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  發送 Bark      │ 自動循環發送到
+│  推送 (HTTP)    │ 每個訂閱裝置
+└─────────────────┘
 ```
 
 ---
@@ -179,35 +191,33 @@ n8n start
 
 **Sheet 結構**:
 
-#### Sheet 1: "Latest"（記錄數據）
-存儲所有抓取記錄，包含時間戳、評級和變化標記。每次執行都會追加新記錄。
+#### Sheet 1: "工作表1" 或 "Latest"（記錄數據）
+採用**橫向格式**存儲，每個貨幣對是一個欄位。每次執行追加一行新記錄。
 
-| A: Timestamp | B: Symbol | C: Technical Rating | D: Changed | E: Previous Rating |
-|--------------|-----------|---------------------|------------|-------------------|
-| 2025-10-24 10:00:00 | EURUSD | Strong Buy | No | Strong Buy |
-| 2025-10-24 10:00:00 | GBPUSD | Buy | Yes | Neutral |
-| 2025-10-24 09:00:00 | EURUSD | Strong Buy | No | Strong Buy |
-| 2025-10-24 09:00:00 | GBPUSD | Neutral | No | Neutral |
-| ...          | ...       | ...                 | ...        | ...               |
+| A: Timestamp | B: EURUSD | C: GBPUSD | D: USDJPY | E: AUDCAD | F: ... |
+|--------------|-----------|-----------|-----------|-----------|--------|
+| 2025-10-27T15:00:00.000Z | Strong Buy | Buy | Neutral | Sell | ... |
+| 2025-10-27T13:00:00.000Z | Strong Buy | Neutral | Neutral | Sell | ... |
+| 2025-10-27T11:00:00.000Z | Buy | Neutral | Buy | Neutral | ... |
+| ...          | ...       | ...       | ...       | ...       | ...    |
 
-**說明**:
-- 簡化為單一工作表，包含所有歷史記錄
-- 每次執行追加新數據，保留完整時間序列
-- `Changed` 欄位標記評級是否變化（Yes/No）
-- `Previous Rating` 欄位顯示上一次的評級
+**格式特點**:
+- ✅ **橫向布局**: 時間戳在第一列，每個貨幣對佔一列
+- ✅ **固定 Symbols**: 因為貨幣對數量固定，這種格式更直觀
+- ✅ **簡潔高效**: 每次執行只追加一行，包含所有貨幣對的當前評級
+- ✅ **易於比對**: 直接讀取最後兩行即可進行變化檢測
+- ✅ **時間序列**: 自然形成時間序列數據，適合趨勢分析
 
 ### 2.2 預先設定 Google Sheet
 
 **步驟**:
 1. 建立新的 Google Sheet
 2. 重命名為 `TradingView_Forex_Screener`
-3. 建立工作表 "Latest"
-4. 在 "Latest" sheet 添加標題行（第一行）:
+3. 保留默認的 "工作表1" (或命名為 "Latest")
+4. 在第一行添加標題行:
    - A1: `Timestamp`
-   - B1: `Symbol`
-   - C1: `Technical Rating`
-   - D1: `Changed`
-   - E1: `Previous Rating`
+   - B1, C1, D1... 等: 將由第一次執行自動填入各貨幣對名稱 (如 `EURUSD`, `GBPUSD` 等)
+   - ℹ️ **注意**: 使用 Google Sheets 的 "Auto-Map Input Data" 功能，首次追加時會自動建立標題
 5. 將 Sheet 分享給 N8N 的 Service Account Email（如 `xxx@xxx.iam.gserviceaccount.com`）並給予編輯權限
 6. 記錄 Google Sheet ID（從 URL 提取）
 
@@ -348,58 +358,54 @@ Sheet ID: 1ABC123xyz
 
 ---
 
-#### Node 3: Code - Parse Firecrawl Response（解析回應）
+#### Node 3: Code - Parse and Format Data（解析並轉換為橫向格式）
 **節點類型**: `Code`  
 **名稱**: `Parse and Format Data`
 
 **JavaScript Code**:
 ```javascript
-// 取得 Firecrawl 回應
-const response = $input.item.json;
+const response = $input.first().json;
 
-// 檢查回應是否成功
-if (!response.success || !response.data || !response.data.data) {
+if (!response.success || !response.data || !response.data.json.data) {
   throw new Error('Firecrawl API 回應格式錯誤或抓取失敗');
 }
 
-// 提取數據陣列
-const scrapedData = response.data.data;
-
-// 當前時間戳
+const scrapedData = response.data.json.data;
 const timestamp = new Date().toISOString();
 
-// 格式化數據
-const formattedData = scrapedData.map(item => ({
-  symbol: item.symbol_name,
-  technical_rating: item.technical_rating,
-  timestamp: timestamp
-}));
+// 轉換成橫向格式：一個物件包含所有 symbol 的評級
+const rowData = {
+  'Timestamp': timestamp
+};
 
-// 回傳格式化後的數據
-return formattedData.map(item => ({ json: item }));
+scrapedData.forEach(item => {
+  rowData[item.symbol_name] = item.technical_rating;
+});
+
+console.log(`抓取完成: ${scrapedData.length} 個貨幣對`);
+console.log('資料格式:', Object.keys(rowData).join(', '));
+
+return [{ json: rowData }];
 ```
 
 **說明**:
 - 解析 Firecrawl 回傳的巢狀 JSON 結構
-- 提取 `data.data` 陣列
-- 為每筆數據添加時間戳
-- 轉換為 N8N 標準格式（每個項目包裹在 `{ json: {...} }` 中）
+- **轉換為橫向格式**: 將所有貨幣對的評級放在同一個物件中
+- 每個 symbol_name 成為物件的一個 key，對應的 technical_rating 是值
+- 添加 Timestamp 欄位
+- 輸出單一物件（一行數據），包含所有貨幣對
 
 **輸出範例**:
 ```json
 [
   {
     "json": {
-      "symbol": "EURUSD",
-      "technical_rating": "Strong Buy",
-      "timestamp": "2025-10-24T10:00:00.000Z"
-    }
-  },
-  {
-    "json": {
-      "symbol": "GBPUSD",
-      "technical_rating": "Buy",
-      "timestamp": "2025-10-24T10:00:00.000Z"
+      "Timestamp": "2025-10-27T15:00:00.000Z",
+      "EURUSD": "Strong Buy",
+      "GBPUSD": "Buy",
+      "USDJPY": "Neutral",
+      "AUDCAD": "Sell",
+      "NZDUSD": "Buy"
     }
   }
 ]
@@ -407,218 +413,146 @@ return formattedData.map(item => ({ json: item }));
 
 ---
 
-#### Node 4: Google Sheets - Read Latest Data（讀取最新數據）
+#### Node 4: Google Sheets - Append Latest Data（追加最新數據）
 **節點類型**: `Google Sheets`  
-**名稱**: `Read Latest Sheet`
+**名稱**: `追加到 Google Sheet`
+
+**配置**:
+- **Credential**: `Google_Sheets_TV_Screener`
+- **Operation**: `Append`
+- **Document**: `TradingView_Forex_Screener` (輸入 Sheet ID: `1xY-x6Ck1bHRTylODJJLSsfaI2x8JKjjvJBVoxKO3fkQ`)
+- **Sheet Name**: `工作表1` (gid=0)
+- **Columns Mapping**: `Auto-Map Input Data` ✅
+- **Options**: 保持默認
+
+**說明**:
+- **先儲存再比對**: 首先將新抓取的數據追加到 Google Sheet
+- 使用橫向格式，一行包含所有貨幣對的評級
+- Auto-Map 會自動將物件的 keys 對應到欄位名稱
+- 第一次執行時會自動建立標題行
+
+---
+
+#### Node 5: Google Sheets - Read All Historical Data（讀取所有歷史數據）
+**節點類型**: `Google Sheets`  
+**名稱**: `讀取所有歷史數據`
 
 **配置**:
 - **Credential**: `Google_Sheets_TV_Screener`
 - **Operation**: `Read`
-- **Document**: `TradingView_Forex_Screener` (輸入 Sheet ID: `1ABC123xyz`)
-- **Sheet Name**: `Latest`
-- **Range**: `A:C` (讀取 A、B、C 三欄)
-- **Options**:
-  - RAW: false (解析數據)
-  - Value Render: `FORMATTED_VALUE`
+- **Document**: `TradingView_Forex_Screener` (輸入 Sheet ID)
+- **Sheet Name**: `工作表1` (gid=0)
+- **Options**: 
+  - Range Definition: `detectAutomatically` (讀取所有數據)
 
 **說明**:
-- 讀取 "Latest" sheet 中所有數據
-- 用於後續與新抓取數據進行比對
-- 如果是第一次執行，sheet 可能為空（僅標題行）
-
-**輸出範例**:
-```json
-[
-  {
-    "json": {
-      "Symbol": "EURUSD",
-      "Technical Rating": "Strong Buy",
-      "Last Updated": "2025-10-24 09:00:00"
-    }
-  },
-  {
-    "json": {
-      "Symbol": "GBPUSD",
-      "Technical Rating": "Neutral",
-      "Last Updated": "2025-10-24 09:00:00"
-    }
-  }
-]
-```
+- 在追加新數據後，讀取 Sheet 中的所有歷史記錄
+- 用於比對最近兩行數據以檢測變化
+- 如果是第一次執行，只有一行數據，無法比對
 
 ---
 
-#### Node 5: Code - Compare and Detect Changes（比對變化）
+#### Node 6: Code - Compare Recent Rows and Detect Changes（比對最近兩行找變化）
 **節點類型**: `Code`  
-**名稱**: `Compare Data and Detect Changes`
+**名稱**: `比對最近兩行找變化`
 
 **JavaScript Code**:
 ```javascript
-// 取得新抓取的數據（來自 Node 3）
-const newData = $('Parse and Format Data').all();
+const allData = $input.all();
 
-// 取得上一次的數據（來自 Node 4）
-const previousDataRaw = $('Read Latest Sheet').all();
+if (!allData || allData.length < 2) {
+  console.log(`數據不足，只有 ${allData?.length || 0} 行`);
+  return [{ json: { has_changes: false, changes: [], is_first_run: true } }];
+}
 
-// 建立上一次數據的 Map（symbol -> rating）
-const previousDataMap = new Map();
-previousDataRaw.forEach(item => {
-  const symbol = item.json['Symbol'];
-  const rating = item.json['Technical Rating'];
-  if (symbol && rating) {
-    previousDataMap.set(symbol, rating);
-  }
+// 按時間戳排序，取最後兩行
+const sortedData = allData.sort((a, b) => {
+  const timeA = new Date(a.json['Timestamp']).getTime();
+  const timeB = new Date(b.json['Timestamp']).getTime();
+  return timeB - timeA; // 降序
 });
 
-// 比對數據，檢測變化
-const results = [];
-const changes = [];
+const latestRow = sortedData[0].json;
+const previousRow = sortedData[1].json;
 
-newData.forEach(item => {
-  const symbol = item.json.symbol;
-  const newRating = item.json.technical_rating;
-  const timestamp = item.json.timestamp;
+const latestTimestamp = latestRow['Timestamp'];
+const previousTimestamp = previousRow['Timestamp'];
+
+console.log(`比對時間: ${previousTimestamp} -> ${latestTimestamp}`);
+
+// 找出所有 Symbol 欄位（排除 Timestamp 和 Google Sheets 的元數據字段）
+const metadataFields = ['Timestamp', 'row_number', 'row_index', '_id'];
+const symbols = Object.keys(latestRow).filter(key => !metadataFields.includes(key));
+console.log(`共有 ${symbols.length} 個貨幣對`);
+
+// 比對每個 Symbol 的變化
+const changes = [];
+symbols.forEach(symbol => {
+  const newRating = latestRow[symbol];
+  const oldRating = previousRow[symbol];
   
-  // 檢查是否存在上一次的評級
-  const previousRating = previousDataMap.get(symbol) || null;
-  const hasChanged = previousRating && previousRating !== newRating;
-  
-  // 準備結果數據
-  const result = {
-    timestamp: timestamp,
-    symbol: symbol,
-    technical_rating: newRating,
-    changed: hasChanged ? 'Yes' : 'No',
-    previous_rating: previousRating || 'N/A'
-  };
-  
-  results.push(result);
-  
-  // 如果有變化，記錄到 changes 陣列
-  if (hasChanged) {
+  if (oldRating && newRating && oldRating !== newRating) {
     changes.push({
-      timestamp: timestamp,
+      timestamp: latestTimestamp,
       symbol: symbol,
-      from_rating: previousRating,
-      to_rating: newRating,
-      notified: 'Pending'
+      from_rating: oldRating,
+      to_rating: newRating
     });
   }
 });
 
-// 回傳兩組數據：所有結果 + 變化項目
+console.log(`發現 ${changes.length} 個變化`);
+
 return [{
   json: {
-    all_results: results,
-    changes: changes,
     has_changes: changes.length > 0,
-    total_symbols: results.length,
-    total_changes: changes.length
+    changes: changes,
+    total_changes: changes.length,
+    total_symbols: symbols.length,
+    latest_timestamp: latestTimestamp,
+    previous_timestamp: previousTimestamp,
+    is_first_run: false
   }
 }];
 ```
 
 **說明**:
-- 比對新抓取數據與上一次數據
-- 識別 technical_rating 變化
-- 回傳兩組數據：
-  - `all_results`: 所有貨幣對的完整數據（用於更新 Latest 和 History sheets）
-  - `changes`: 僅包含有變化的項目（用於通知和 Changes_Log）
-- 設定 `has_changes` 標記供後續 IF 節點判斷
+- 讀取所有歷史數據後，按時間戳排序
+- 取最後兩行（最新和前一次）進行比對
+- 過濾出實際的 Symbol 欄位（排除 Timestamp 和 Google Sheets 元數據）
+- 逐個比對每個貨幣對的評級變化
+- 僅當評級確實改變時才記錄到 `changes` 陣列
+- 處理首次執行情況（數據不足 2 行時）
 
 **輸出範例**:
 ```json
 {
   "json": {
-    "all_results": [
-      {
-        "timestamp": "2025-10-24T10:00:00.000Z",
-        "symbol": "EURUSD",
-        "technical_rating": "Strong Buy",
-        "changed": "No",
-        "previous_rating": "Strong Buy"
-      },
-      {
-        "timestamp": "2025-10-24T10:00:00.000Z",
-        "symbol": "GBPUSD",
-        "technical_rating": "Buy",
-        "changed": "Yes",
-        "previous_rating": "Neutral"
-      }
-    ],
+    "has_changes": true,
     "changes": [
       {
-        "timestamp": "2025-10-24T10:00:00.000Z",
+        "timestamp": "2025-10-27T15:00:00.000Z",
         "symbol": "GBPUSD",
         "from_rating": "Neutral",
-        "to_rating": "Buy",
-        "notified": "Pending"
+        "to_rating": "Buy"
+      },
+      {
+        "timestamp": "2025-10-27T15:00:00.000Z",
+        "symbol": "NZDUSD",
+        "from_rating": "Sell",
+        "to_rating": "Neutral"
       }
     ],
-    "has_changes": true,
-    "total_symbols": 2,
-    "total_changes": 1
+    "total_changes": 2,
+    "total_symbols": 70,
+    "is_first_run": false
   }
 }
 ```
 
 ---
 
-#### Node 6: Code - Prepare Sheet Data（準備工作表數據）
-**節點類型**: `Code`  
-**名稱**: `準備工作表數據`
-
-**JavaScript Code**:
-```javascript
-// 從 Compare 節點取得所有結果
-const allResults = $json.all_results;
-
-if (!allResults || allResults.length === 0) {
-  return [];
-}
-
-// 轉換為 Google Sheets 格式
-const sheetData = allResults.map(item => ({
-  json: {
-    'Timestamp': item.timestamp,
-    'Symbol': item.symbol,
-    'Technical Rating': item.technical_rating,
-    'Changed': item.changed,
-    'Previous Rating': item.previous_rating
-  }
-}));
-
-return sheetData;
-```
-
-**說明**:
-- 從比對節點提取 `all_results` 數據
-- 轉換為適合 Google Sheets 的格式
-- 每個項目包含時間戳、貨幣對、評級、變化標記和前一次評級
-
----
-
-#### Node 7: Google Sheets - Append Latest Data（記錄最新數據）
-**節點類型**: `Google Sheets`  
-**名稱**: `記錄最新數據`
-
-**配置**:
-- **Credential**: `Google_Sheets_TV_Screener`
-- **Operation**: `Append`
-- **Document**: `TradingView_Forex_Screener` (輸入 Sheet ID)
-- **Sheet Name**: `Latest`
-- **Columns Mapping**: `Auto-Map Input Data`
-- **Options**: 保持默認
-
-**說明**:
-- 將所有數據（包括未變化的）追加到 Latest sheet
-- 保留完整的歷史追蹤記錄
-- 每次執行都會新增一批數據，形成時間序列
-- 簡化為單一工作表，無需維護多個 sheets
-
----
-
-#### Node 8: IF - Check if Changes Exist（檢查是否有變化）
+#### Node 7: IF - Check if Changes Exist（檢查是否有變化）
 **節點類型**: `IF`  
 **名稱**: `Has Changes?`
 
@@ -633,26 +567,154 @@ return sheetData;
 
 ---
 
-#### Node 9: Code - Format Notification Message（格式化通知訊息）
+#### Node 8: Code - Prepare Multi-Device Push（準備多裝置推送）
 **節點類型**: `Code`  
-**名稱**: `Format Bark Notification`
+**名稱**: `準備多裝置推送`
 
 **執行條件**: 僅在 IF 節點條件為 true 時執行
 
 **JavaScript Code**:
 ```javascript
-// 取得變化數據
+// 🎯 在這裡管理所有用戶的訂閱設定
+// 每個用戶可以選擇只接收特定貨幣對的變化通知
+
+const userSubscriptions = [
+  {
+    device_key: 'iXrrdsXHDFBrin5KaqzUmc',
+    name: '你自己',
+    symbols: ['EURNZD', 'GBPSGD', 'NZDUSD', 'USDCHF', 'ETHUSD', 'AUDUSA']
+  },
+  // {
+  //   device_key: 'FRIEND_DEVICE_KEY_1',
+  //   name: '朋友 1',
+  //   symbols: ['EURUSD', 'GBPUSD', 'USDJPY']  // 朋友 1 只想看這幾個
+  // },
+  // {
+  //   device_key: 'FRIEND_DEVICE_KEY_2',
+  //   name: '朋友 2',
+  //   symbols: []  // 空陣列 = 接收所有變化
+  // },
+];
+
+const allChanges = $input.first().json.changes;
+
+if (!allChanges || allChanges.length === 0) {
+  console.log('沒有任何變化');
+  return [];
+}
+
+const results = [];
+
+userSubscriptions.forEach(user => {
+  // 如果用戶的 symbols 是空陣列，代表接收所有變化
+  let userChanges = allChanges;
+  
+  if (user.symbols && user.symbols.length > 0) {
+    // 過濾出用戶訂閱的貨幣對
+    userChanges = allChanges.filter(change => 
+      user.symbols.includes(change.symbol)
+    );
+  }
+  
+  // 只有當有相關變化時才推送
+  if (userChanges.length > 0) {
+    results.push({
+      json: {
+        device_key: user.device_key,
+        user_name: user.name,
+        changes: userChanges,
+        total_changes: userChanges.length,
+        subscribed_symbols: user.symbols
+      }
+    });
+    
+    console.log(`✅ ${user.name}: ${userChanges.length} 個相關變化`);
+  } else {
+    console.log(`⏭️  ${user.name}: 沒有訂閱的貨幣對變化，跳過推送`);
+  }
+});
+
+console.log(`準備發送通知到 ${results.length} 個裝置`);
+
+return results;
+```
+
+**說明**:
+- 🎯 **個性化訂閱中心**: 管理所有用戶的訂閱設定
+- 每個用戶可指定只接收特定貨幣對的變化通知
+- `symbols: []` 空陣列表示接收所有變化
+- 智能過濾：只推送用戶關心的貨幣對變化
+- 支持多用戶：輕鬆添加新朋友，只需添加一行配置
+- 自動跳過沒有相關變化的用戶
+
+**配置範例**:
+```javascript
+// 添加新朋友只需要：
+{
+  device_key: 'ABC123DEF456',  // 從 Bark App 獲取
+  name: '朋友的名字',
+  symbols: ['EURUSD', 'GBPUSD']  // 他關心的貨幣對
+}
+```
+
+**輸出範例**:
+```json
+[
+  {
+    "json": {
+      "device_key": "iXrrdsXHDFBrin5KaqzUmc",
+      "user_name": "你自己",
+      "changes": [
+        {
+          "timestamp": "2025-10-27T15:00:00.000Z",
+          "symbol": "EURNZD",
+          "from_rating": "Buy",
+          "to_rating": "Strong Buy"
+        }
+      ],
+      "total_changes": 1,
+      "subscribed_symbols": ["EURNZD", "GBPSGD", "NZDUSD", "USDCHF", "ETHUSD", "AUDUSA"]
+    }
+  }
+]
+```
+
+---
+
+#### Node 9: Code - Format Individual Notification（格式化個人通知）
+**節點類型**: `Code`  
+**名稱**: `格式化個人通知`
+
+**執行條件**: 僅在 IF 節點條件為 true 時執行
+
+**JavaScript Code**:
+```javascript
 const changes = $json.changes;
 
-// 如果沒有變化，不應該執行到這裡
 if (!changes || changes.length === 0) {
   return [];
 }
 
-// 格式化通知訊息
-const title = `📊 TradingView 技術評級變化 (${changes.length})`;
+// 簡短有力的標題
+const count = changes.length;
+const title = count === 1 ? `📊 Forex Screener • 1 changed` : `📊 Forex Screener • ${count} changed`;
 
-// 建立訊息內容
+function isMoreBullish(from, to) {
+  const ratings = ['Strong Sell', 'Sell', 'Neutral', 'Buy', 'Strong Buy'];
+  return ratings.indexOf(to) > ratings.indexOf(from);
+}
+
+function isMoreBearish(from, to) {
+  const ratings = ['Strong Sell', 'Sell', 'Neutral', 'Buy', 'Strong Buy'];
+  return ratings.indexOf(to) < ratings.indexOf(from);
+}
+
+function getArrow(from, to) {
+  if (isMoreBullish(from, to)) return '📈→';
+  if (isMoreBearish(from, to)) return '📉→';
+  return '→';
+}
+
 const messageLines = changes.map(change => {
   const arrow = getArrow(change.from_rating, change.to_rating);
   return `${change.symbol}: ${change.from_rating} ${arrow} ${change.to_rating}`;
@@ -660,67 +722,30 @@ const messageLines = changes.map(change => {
 
 const message = messageLines.join('\n');
 
-// 判斷整體趨勢
-const bullishCount = changes.filter(c => isMoreBullish(c.from_rating, c.to_rating)).length;
-const bearishCount = changes.filter(c => isMoreBearish(c.from_rating, c.to_rating)).length;
-
-let trend = '';
-if (bullishCount > bearishCount) {
-  trend = '📈 偏多信號增加';
-} else if (bearishCount > bullishCount) {
-  trend = '📉 偏空信號增加';
-} else {
-  trend = '⚖️ 評級分散變化';
-}
-
-// 建立完整訊息
-const fullMessage = `${message}\n\n${trend}`;
-
-// 輔助函數：判斷是否更偏多
-function isMoreBullish(from, to) {
-  const ratings = ['Strong Sell', 'Sell', 'Neutral', 'Buy', 'Strong Buy'];
-  const fromIndex = ratings.indexOf(from);
-  const toIndex = ratings.indexOf(to);
-  return toIndex > fromIndex;
-}
-
-// 輔助函數：判斷是否更偏空
-function isMoreBearish(from, to) {
-  const ratings = ['Strong Sell', 'Sell', 'Neutral', 'Buy', 'Strong Buy'];
-  const fromIndex = ratings.indexOf(from);
-  const toIndex = ratings.indexOf(to);
-  return toIndex < fromIndex;
-}
-
-// 輔助函數：取得箭頭符號
-function getArrow(from, to) {
-  if (isMoreBullish(from, to)) return '📈→';
-  if (isMoreBearish(from, to)) return '📉→';
-  return '→';
-}
-
-// 回傳格式化後的通知數據
 return [{
   json: {
+    device_key: $json.device_key,
     title: title,
-    message: fullMessage,
+    message: message,
     changes: changes
   }
 }];
 ```
 
 **說明**:
-- 格式化變化訊息為易讀格式
-- 添加 emoji 增強可讀性
-- 判斷整體市場趨勢（偏多/偏空）
-- 準備 Bark 通知所需的 title 和 message
+- 為每個用戶生成專屬通知內容
+- **簡潔標題**: `📊 Forex Screener • X changed`
+- 根據變化方向添加箭頭 emoji（📈 偏多 / 📉 偏空）
+- 僅包含該用戶訂閱的貨幣對變化
+- **移除趨勢摘要**: 專注於具體變化，不再顯示整體趨勢
 
 **輸出範例**:
 ```json
 {
   "json": {
-    "title": "📊 TradingView 技術評級變化 (2)",
-    "message": "GBPUSD: Neutral 📈→ Buy\nEURUSD: Buy 📈→ Strong Buy\n\n📈 偏多信號增加",
+    "device_key": "iXrrdsXHDFBrin5KaqzUmc",
+    "title": "📊 Forex Screener • 2 changed",
+    "message": "EURNZD: Buy 📈→ Strong Buy\nNZDUSD: Neutral 📉→ Sell",
     "changes": [...]
   }
 }
@@ -730,32 +755,20 @@ return [{
 
 #### Node 10: HTTP Request - Send Bark Notification（發送 Bark 通知）
 **節點類型**: `HTTP Request`  
-**名稱**: `Send Bark Push`
+**名稱**: `發送 Bark 推送`
 
 **執行條件**: 僅在 IF 節點條件為 true 時執行
 
 **配置**:
-- **Method**: `GET`
-- **URL**: `https://api.day.app/{{ $env.BARK_KEY }}/{{ $json.title }}/{{ $json.message }}`
-- **Authentication**: None
-- **Options**:
-  - Encoding: URL Encode Query Parameters
-
-**環境變數設定**:
-在 N8N 的環境變數中設定：
-```bash
-BARK_KEY=yourkey
-```
-
-**替代方案（POST 請求，支援更多功能）**:
 - **Method**: `POST`
 - **URL**: `https://api.day.app/push`
+- **Send Body**: Yes (JSON)
 - **Body** (JSON):
 ```json
 {
-  "device_key": "{{ $env.BARK_KEY }}",
-  "title": "{{ $json.title }}",
-  "body": "{{ $json.message }}",
+  "device_key": "={{ $json.device_key }}",
+  "title": "={{ $json.title }}",
+  "body": "={{ $json.message }}",
   "sound": "bell",
   "icon": "https://www.tradingview.com/favicon.ico",
   "group": "TradingView",
@@ -764,38 +777,25 @@ BARK_KEY=yourkey
 ```
 
 **說明**:
-- 使用 Bark API 發送推送通知到 iOS 裝置
-- GET 方法簡單但功能有限
-- POST 方法支援自訂圖示、分組、點擊跳轉等
-- 通知將包含所有技術評級變化
+- 使用 POST 方法發送推送通知到 iOS 裝置
+- **自動循環發送**: N8N 會自動為每個輸入項目執行一次（多裝置推送）
+- `device_key` 從前一個節點獲取（每個用戶有不同的 key）
+- 支援自訂圖示、分組、點擊跳轉等功能
+- 每個用戶只收到他們訂閱的貨幣對變化
 
 **Bark 進階功能**:
-- `sound`: 通知音效（如 `bell`, `alarm`, `silence`）
+- `sound`: 通知音效（`bell`, `alarm`, `silence`）
 - `icon`: 自訂圖示 URL
-- `group`: 通知分組
+- `group`: 通知分組（所有通知歸類到 "TradingView"）
 - `url`: 點擊通知後跳轉的連結
 - `isArchive`: 是否自動存檔（1=是，0=否）
 
----
-
-#### Node 11: Stop and Error（錯誤處理，選用）
-**節點類型**: `Stop and Error`  
-**名稱**: `Handle Errors`
-
-**觸發條件**: 從各節點的 Error Output 連接
-
-**配置**:
-- **Error Message**: `{{ $json.error.message }}`
-- **Send Notification**: 可選擇發送錯誤通知到 Bark
-
-**建議錯誤通知格式**:
+**通知示例**:
 ```
-🚨 TradingView Screener 錯誤
+📊 Forex Screener • 2 changed
 
-節點: {{ $json.error.node }}
-訊息: {{ $json.error.message }}
-
-請檢查 N8N workflow。
+EURNZD: Buy 📈→ Strong Buy
+NZDUSD: Neutral 📉→ Sell
 ```
 
 ---
@@ -1915,30 +1915,45 @@ const compareData = (newData, oldData) => {
 1. ✅ **完全自動化**: 無需手動操作，定時自動抓取和分析
 2. ✅ **零成本運行**: 使用免費服務，每月成本 $0
 3. ✅ **即時通知**: 評級變化時立即推送到手機
-4. ✅ **數據永久保存**: Google Sheets 保留完整歷史記錄
+4. ✅ **數據永久保存**: Google Sheets 保留完整歷史記錄（橫向格式）
 5. ✅ **易於擴展**: 可輕鬆調整為監控其他市場或指標
 6. ✅ **簡化架構**: 單一工作表設計，維護更輕鬆
+7. 🎯 **個性化訂閱**: 每個用戶只接收他們關心的貨幣對變化
+8. 🎯 **多裝置支持**: 輕鬆添加新朋友，共享有價值的信號
 
 **技術亮點**:
 - 使用 Firecrawl AI-powered web scraping 技術
 - 智能比對邏輯，精準識別評級變化
-- 簡化的單一工作表存儲，包含完整時間序列數據
-- 優雅的 Bark 通知格式
+- **橫向數據格式**: 直觀高效的時間序列存儲
+- **訂閱過濾系統**: 根據用戶興趣智能過濾通知
+- **簡潔通知格式**: `📊 Forex Screener • X changed`
+- 優雅的 Bark 推送，支援多裝置自動循環發送
 
 **後續改進方向**:
 - 整合多個 Screener 來源交叉驗證
 - 添加歷史回測和信號分析
 - 建立 Data Studio 儀表板
 - 擴展至 Crypto 和 Stock Screeners
+- 添加更多智能過濾規則（如重大變化、連續變化等）
+- 支持自定義通知頻率和時段
 
-本系統為投資者提供了一個強大且靈活的市場監控工具，幫助及時捕捉技術評級的重要變化。
+本系統為投資者提供了一個強大且靈活的市場監控工具，幫助及時捕捉技術評級的重要變化。通過個性化訂閱功能，每個用戶都能專注於自己關心的市場，減少信息噪音，提高決策效率。
 
 ---
 
-**文件版本**: v1.0  
+**文件版本**: v2.0  
 **建立日期**: 2025-10-24  
-**最後更新**: 2025-10-24  
+**最後更新**: 2025-10-27  
 **作者**: Wing Chan  
-**專案狀態**: 設計階段
+**專案狀態**: 生產運行
+
+**版本更新歷史**:
+- v1.0 (2025-10-24): 初始版本，基礎工作流設計
+- v2.0 (2025-10-27): 
+  - 🎯 添加個性化訂閱功能（每個用戶可選擇特定貨幣對）
+  - 📊 更改通知標題為 "Forex Screener"
+  - 🔄 採用橫向數據格式，簡化數據結構
+  - ✨ 支持多裝置推送，輕鬆添加新用戶
+  - 🗑️ 移除趨勢摘要，專注於具體變化
 
 
